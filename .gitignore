@@ -140,8 +140,7 @@ vite.config.ts.timestamp-*
 
 .kiro
 .vscode
-docs
 
 # Claude
+.agents
 .claude
-AGENTS.md

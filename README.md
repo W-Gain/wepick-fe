@@ -2,7 +2,7 @@
 
 WePick의 사용자 화면, 상호작용과 API 연동을 구현하는 저장소입니다.
 
-제품·정책·화면 정의·디자인 원본과 공통 API 설계는 [wepick-product](https://github.com/W-Gain/wepick-product)가 관리합니다. 구현할 때 [프런트엔드 기술 스택 결정](https://github.com/W-Gain/wepick-product/blob/main/docs/decisions/0002-frontend-technology-stack.md)과 [마이그레이션 계획](https://github.com/W-Gain/wepick-product/blob/main/docs/working/frontend-migration-plan.md)을 따릅니다.
+제품·정책·화면 정의·디자인 원본과 공통 API 설계는 [wepick-product](https://github.com/W-Gain/wepick-product)가 관리합니다. 구현할 때 [프런트엔드 기술 스택 결정](https://github.com/W-Gain/wepick-product/blob/main/docs/decisions/0002-frontend-technology-stack.md)과 [마이그레이션 계획](docs/migration-plan.md)을 따릅니다.
 
 ## 현재 구현 상태
 

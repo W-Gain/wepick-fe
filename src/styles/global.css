@@ -1150,6 +1150,12 @@ select {
   gap: 8px;
   align-items: stretch;
 }
+
+/* OVL-004 navigation gap is 8px; no-nav and keyboard placement remain follow-up work. */
+body:has(.bottom-nav) .toast-viewport {
+  bottom: max(80px, calc(72px + env(safe-area-inset-bottom)));
+}
+
 .app-toast {
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) 40px;

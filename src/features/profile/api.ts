@@ -1,16 +1,18 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 
 import { dataMode } from '../../app/enableMocking';
 import type { MemberProfile } from '../../shared/contracts';
 import { memberProfileSchema } from '../../shared/contracts';
-import { apiRequest, clearCsrfToken, refreshCsrfToken } from '../../shared/api/client';
+import { ApiError, apiRequest, clearCsrfToken, refreshCsrfToken } from '../../shared/api/client';
 import { apiDataResponseAdapter, schemaResponseAdapter } from '../../shared/api/responseAdapter';
 import { useAuthFlow } from '../auth/authFlow';
 import { getCurrentMember, type CurrentMember } from '../auth/api';
 import { memberProfileResponseAdapter } from './responseAdapters';
 
-const useMockApi = dataMode === 'mock' || import.meta.env.MODE === 'test';
+// Tests exercise the real /api/me contract and stub its response at the transport boundary.
+const useMockApi = dataMode === 'mock';
 const legacyProfileUserSchema = z.object({
   userId: z.number().int().positive(),
   email: z.email(),
@@ -114,18 +116,62 @@ export async function saveProfileChanges(changes: { nickname?: string; file?: Fi
 }
 
 export function useMemberProfile() {
-  const { status } = useAuthFlow();
-  return useQuery({
+  const { status, setStatus } = useAuthFlow();
+  const queryClient = useQueryClient();
+  const query = useQuery({
     queryKey: ['member-profile'],
     enabled: status === 'authenticated',
-    queryFn: () =>
-      useMockApi
-        ? apiRequest<MemberProfile>('/__mock/members/me', {
-            method: 'GET',
-            responseAdapter: memberProfileResponseAdapter,
-          })
-        : getMemberProfile(),
+    queryFn: async () => {
+      const profileQuery = queryClient.getQueryState<MemberProfile>(['member-profile']);
+      const dataUpdateCount = profileQuery?.dataUpdateCount ?? 0;
+      try {
+        return useMockApi
+          ? await apiRequest<MemberProfile>('/__mock/members/me', {
+              method: 'GET',
+              responseAdapter: memberProfileResponseAdapter,
+            })
+          : await getMemberProfile();
+      } catch (error) {
+        const currentProfileQuery = queryClient.getQueryState<MemberProfile>(['member-profile']);
+        if (
+          error instanceof ApiError &&
+          error.status === 401 &&
+          currentProfileQuery?.data !== undefined &&
+          (currentProfileQuery.dataUpdateCount ?? 0) > dataUpdateCount
+        ) {
+          // A login callback confirmed and cached a fresh member while this older /me was pending.
+          return currentProfileQuery.data;
+        }
+        throw error;
+      }
+    },
+    retry: (failureCount, error) => {
+      // A member-only 401 means the session expired; 5xx and network errors stay retryable.
+      if (error instanceof ApiError && error.status === 401) return false;
+      return failureCount < 1;
+    },
   });
+
+  useEffect(() => {
+    if (!(query.error instanceof ApiError) || query.error.status !== 401) return;
+    setStatus('anonymous');
+    clearCsrfToken();
+    clearMemberSessionQueries(queryClient);
+  }, [query.error, queryClient, setStatus]);
+
+  return query;
+}
+
+function clearMemberSessionQueries(queryClient: QueryClient) {
+  for (const queryKey of [
+    ['member-profile'],
+    ['vote-history'],
+    ['pick'],
+    ['picks'],
+    ['pick-opinions'],
+  ]) {
+    queryClient.removeQueries({ queryKey });
+  }
 }
 
 export function useLogout() {
@@ -139,11 +185,7 @@ export function useLogout() {
         void refreshCsrfToken().catch(() => clearCsrfToken());
       }
       setStatus('anonymous');
-      queryClient.removeQueries({ queryKey: ['member-profile'] });
-      queryClient.removeQueries({ queryKey: ['vote-history'] });
-      queryClient.removeQueries({ queryKey: ['pick'] });
-      queryClient.removeQueries({ queryKey: ['picks'] });
-      queryClient.removeQueries({ queryKey: ['pick-opinions'] });
+      clearMemberSessionQueries(queryClient);
     },
   });
 }

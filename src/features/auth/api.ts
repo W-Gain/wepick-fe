@@ -12,13 +12,17 @@ export const currentMemberSchema = z.object({
 
 export type CurrentMember = z.infer<typeof currentMemberSchema>;
 
+export type CurrentMemberRequestOptions = {
+  bypassInFlight?: boolean;
+};
+
 export const currentMemberResponseAdapter = apiDataResponseAdapter(currentMemberSchema);
 
 let currentMemberRequest: Promise<CurrentMember> | null = null;
 let currentMemberRequestId = 0;
 
-export function getCurrentMember() {
-  if (currentMemberRequest) return currentMemberRequest;
+export function getCurrentMember({ bypassInFlight = false }: CurrentMemberRequestOptions = {}) {
+  if (currentMemberRequest && !bypassInFlight) return currentMemberRequest;
 
   const requestId = ++currentMemberRequestId;
   const request = apiRequest<CurrentMember>('/me', {

@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -36,6 +37,13 @@ function renderScreen() {
 
 describe('ProfileEditScreen', () => {
   it('validates the nickname and moves only after saving a valid change', async () => {
+    server.use(
+      http.get('*/api/me', () =>
+        HttpResponse.json({
+          data: { id: 7, nickname: memberProfile.nickname, profileImageUrl: null },
+        }),
+      ),
+    );
     const user = userEvent.setup();
     const client = renderScreen();
     const nickname = await screen.findByRole('textbox', { name: '닉네임' });
@@ -54,7 +62,7 @@ describe('ProfileEditScreen', () => {
 
     expect(await screen.findByText('프로필 화면')).toBeInTheDocument();
     expect(client.getQueryData(['member-profile'])).toMatchObject({
-      id: memberProfile.id,
+      id: '7',
       nickname: '새닉네임',
     });
   });

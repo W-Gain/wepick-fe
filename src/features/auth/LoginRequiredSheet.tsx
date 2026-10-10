@@ -1,8 +1,9 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { Button, CloseIcon, useToast } from '../../shared/ui';
 import { type LoginIntent, useAuthFlow } from './authFlow';
+import { startKakaoLogin } from './loginStart';
 
 type LoginRequiredSheetProps = {
   open: boolean;
@@ -20,21 +21,47 @@ function OpenLoginRequiredSheet({
 }: OpenLoginRequiredSheetProps) {
   const { clear, setSuspended } = useToast();
   const { beginLogin, cancelLogin } = useAuthFlow();
-  const [loginStarted, setLoginStarted] = useState(false);
+  const [loginState, setLoginState] = useState<'idle' | 'preparing' | 'error'>('idle');
+  const activeLoginRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     clear();
     setSuspended(true);
-    return () => setSuspended(false);
+    return () => {
+      activeLoginRef.current?.abort();
+      setSuspended(false);
+    };
   }, [clear, setSuspended]);
 
-  function startLogin() {
+  // 로그인 준비가 끝나기 전에 시트를 닫으면 대기 중인 준비 요청을 취소해 늦은 페이지 이동을 막는다.
+  function cancelLoginStart() {
+    activeLoginRef.current?.abort();
+    activeLoginRef.current = null;
+    cancelLogin();
+    setLoginState('idle');
+  }
+
+  async function startLogin() {
+    if (activeLoginRef.current || loginState === 'preparing') return;
+    const controller = new AbortController();
+    activeLoginRef.current = controller;
     beginLogin(intent);
-    setLoginStarted(true);
+    setLoginState('preparing');
+
+    try {
+      await startKakaoLogin(intent, controller.signal);
+    } catch {
+      if (!controller.signal.aborted) {
+        cancelLogin();
+        setLoginState('error');
+      }
+    } finally {
+      if (activeLoginRef.current === controller) activeLoginRef.current = null;
+    }
   }
 
   function handleOpenChange(nextOpen: boolean) {
-    if (!nextOpen) cancelLogin();
+    if (!nextOpen) cancelLoginStart();
     onOpenChange(nextOpen);
   }
 
@@ -60,9 +87,18 @@ function OpenLoginRequiredSheet({
               <CloseIcon />
             </Dialog.Close>
           </header>
-          <Button disabled={loginStarted} onClick={startLogin}>
-            {loginStarted ? '로그인 준비 중…' : '카카오로 계속하기'}
+          <Button disabled={loginState === 'preparing'} onClick={startLogin}>
+            {loginState === 'preparing'
+              ? '로그인 준비 중…'
+              : loginState === 'error'
+                ? '다시 시도'
+                : '카카오로 계속하기'}
           </Button>
+          {loginState === 'error' && (
+            <p className="opinion-editor__error" role="alert">
+              로그인을 준비하지 못했어요. 연결을 확인하고 다시 시도해 주세요.
+            </p>
+          )}
           <Dialog.Close asChild>
             <Button variant="ghost">취소</Button>
           </Dialog.Close>

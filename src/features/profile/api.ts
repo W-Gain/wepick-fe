@@ -4,14 +4,20 @@ import { z } from 'zod';
 import { dataMode } from '../../app/enableMocking';
 import type { MemberProfile } from '../../shared/contracts';
 import { memberProfileSchema } from '../../shared/contracts';
-import { apiRequest } from '../../shared/api/client';
+import { apiRequest, clearCsrfToken, refreshCsrfToken } from '../../shared/api/client';
 import { apiDataResponseAdapter, schemaResponseAdapter } from '../../shared/api/responseAdapter';
 import { useAuthFlow } from '../auth/authFlow';
-import { currentUserDtoSchema, getCurrentUser, type CurrentUserDto } from '../auth/api';
+import { getCurrentMember, type CurrentMember } from '../auth/api';
 import { memberProfileResponseAdapter } from './responseAdapters';
 
 const useMockApi = dataMode === 'mock' || import.meta.env.MODE === 'test';
-const userUpdateAdapter = apiDataResponseAdapter(currentUserDtoSchema);
+const legacyProfileUserSchema = z.object({
+  userId: z.number().int().positive(),
+  email: z.email(),
+  profileImageUrl: z.string().nullable(),
+  nickname: z.string().min(1),
+});
+const legacyProfileUpdateAdapter = apiDataResponseAdapter(legacyProfileUserSchema);
 const nicknameCheckAdapter = apiDataResponseAdapter(z.object({ isExisted: z.boolean() }));
 const imageUploadAdapter = apiDataResponseAdapter(
   z.object({
@@ -21,9 +27,9 @@ const imageUploadAdapter = apiDataResponseAdapter(
   }),
 );
 
-export function toMemberProfile(user: CurrentUserDto): MemberProfile {
+export function toMemberProfile(user: CurrentMember): MemberProfile {
   return memberProfileSchema.parse({
-    id: String(user.userId),
+    id: String(user.id),
     nickname: user.nickname,
     profileImage: user.profileImageUrl
       ? { kind: 'url', url: user.profileImageUrl }
@@ -32,12 +38,12 @@ export function toMemberProfile(user: CurrentUserDto): MemberProfile {
 }
 
 export async function getMemberProfile(): Promise<MemberProfile> {
-  return toMemberProfile(await getCurrentUser());
+  return toMemberProfile(await getCurrentMember());
 }
 
 export function logoutCurrentSession() {
-  return apiRequest<null>('/auth', {
-    method: 'DELETE',
+  return apiRequest<null>('/auth/logout', {
+    method: 'POST',
     responseAdapter: schemaResponseAdapter(z.null()),
   });
 }
@@ -80,7 +86,6 @@ export async function saveProfileChanges(changes: { nickname?: string; file?: Fi
     | { nickname: string; profileImageId: number }
     | { nickname: string }
     | { profileImageId: number };
-
   if (file) {
     const { imageId } = await uploadProfileImage(file);
     if (nickname) {
@@ -99,9 +104,13 @@ export async function saveProfileChanges(changes: { nickname?: string; file?: Fi
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    responseAdapter: userUpdateAdapter,
+    responseAdapter: legacyProfileUpdateAdapter,
   });
-  return toMemberProfile(updated);
+  return toMemberProfile({
+    id: updated.userId,
+    nickname: updated.nickname,
+    profileImageUrl: updated.profileImageUrl,
+  });
 }
 
 export function useMemberProfile() {
@@ -126,6 +135,9 @@ export function useLogout() {
   return useMutation({
     mutationFn: () => (useMockApi ? Promise.resolve(null) : logoutCurrentSession()),
     onSuccess: () => {
+      if (!useMockApi) {
+        void refreshCsrfToken().catch(() => clearCsrfToken());
+      }
       setStatus('anonymous');
       queryClient.removeQueries({ queryKey: ['member-profile'] });
       queryClient.removeQueries({ queryKey: ['vote-history'] });

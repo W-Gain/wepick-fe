@@ -5,6 +5,11 @@ import { RouteError } from './RouteError';
 
 export const routes: RouteObject[] = [
   {
+    path: '/auth/complete',
+    lazy: () => import('../routes/AuthCompleteRoute'),
+    errorElement: <RouteError />,
+  },
+  {
     path: '/',
     element: <AppLayout />,
     errorElement: <RouteError />,

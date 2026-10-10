@@ -24,10 +24,11 @@ export function Component() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { setStatus } = useAuthFlow();
+  const { status, setStatus } = useAuthFlow();
   const { notify } = useToast();
   const started = useRef(false);
   const completionRef = useRef<LoginCompletion | null | undefined>(undefined);
+  const enteredWithConfirmedSession = useRef(status === 'authenticated');
 
   useEffect(() => {
     if (started.current) return;
@@ -51,7 +52,11 @@ export function Component() {
       let sessionConfirmed = false;
       let member: Awaited<ReturnType<typeof getCurrentMember>> | null = null;
       try {
-        member = await getCurrentMember();
+        // If this SPA is already authenticated, do not let its older in-flight /me
+        // lookup stand in for confirmation of the callback session.
+        member = await getCurrentMember({
+          bypassInFlight: enteredWithConfirmedSession.current,
+        });
       } catch (error) {
         if (!active) return;
         const unauthenticated = error instanceof ApiError && error.status === 401;

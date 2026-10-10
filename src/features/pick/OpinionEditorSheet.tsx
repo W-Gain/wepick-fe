@@ -32,8 +32,9 @@ function OpenOpinionEditor({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const { clear, setSuspended } = useToast();
   const normalizedBody = body.trim();
+  const bodyCodePointCount = [...body].length;
   const dirty = body !== initialBody;
-  const valid = normalizedBody.length > 0 && body.length <= 300;
+  const valid = normalizedBody.length > 0 && bodyCodePointCount <= 300;
 
   useEffect(() => {
     clear();
@@ -107,7 +108,6 @@ function OpenOpinionEditor({
               <textarea
                 ref={inputRef}
                 value={body}
-                maxLength={300}
                 disabled={submitting}
                 placeholder="왜 이 선택을 골랐나요?"
                 aria-describedby={`opinion-editor-count opinion-editor-help${submitError ? ' opinion-editor-error' : ''}`}
@@ -119,7 +119,7 @@ function OpenOpinionEditor({
               />
             </label>
             <output id="opinion-editor-count" className="opinion-editor__count" aria-live="polite">
-              {body.length} / 300
+              {bodyCodePointCount} / 300
             </output>
             {submitError && (
               <p id="opinion-editor-error" className="opinion-editor__error" role="alert">

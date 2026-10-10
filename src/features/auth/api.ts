@@ -1,35 +1,44 @@
 import { z } from 'zod';
 
-import { apiRequest, ApiError } from '../../shared/api/client';
+import { apiRequest, ApiError, refreshCsrfToken } from '../../shared/api/client';
 import { apiDataResponseAdapter } from '../../shared/api/responseAdapter';
 import type { AuthStatus } from './authFlow';
 
-export const currentUserDtoSchema = z.object({
-  userId: z.number().int().positive(),
-  email: z.email(),
-  profileImageUrl: z.string().nullable(),
+export const currentMemberSchema = z.object({
+  id: z.number().int().positive(),
   nickname: z.string().min(1),
+  profileImageUrl: z.string().nullable(),
 });
 
-export type CurrentUserDto = z.infer<typeof currentUserDtoSchema>;
+export type CurrentMember = z.infer<typeof currentMemberSchema>;
 
-export const currentUserResponseAdapter = apiDataResponseAdapter(currentUserDtoSchema);
+export const currentMemberResponseAdapter = apiDataResponseAdapter(currentMemberSchema);
 
-export function getCurrentUser() {
-  return apiRequest<CurrentUserDto>('/users/me', {
+let currentMemberRequest: Promise<CurrentMember> | null = null;
+let currentMemberRequestId = 0;
+
+export function getCurrentMember() {
+  if (currentMemberRequest) return currentMemberRequest;
+
+  const requestId = ++currentMemberRequestId;
+  const request = apiRequest<CurrentMember>('/me', {
     method: 'GET',
-    responseAdapter: currentUserResponseAdapter,
+    responseAdapter: currentMemberResponseAdapter,
+  }).finally(() => {
+    if (currentMemberRequestId === requestId) currentMemberRequest = null;
   });
+  currentMemberRequest = request;
+  return request;
 }
 
 export async function resolveCurrentSessionStatus(): Promise<AuthStatus> {
   try {
-    await getCurrentUser();
+    await getCurrentMember();
     return 'authenticated';
   } catch (error) {
-    if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-      return 'anonymous';
-    }
+    if (error instanceof ApiError && error.status === 401) return 'anonymous';
     throw error;
   }
 }
+
+export { refreshCsrfToken };

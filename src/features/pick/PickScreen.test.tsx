@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { todayPickAfterVote, todayPickBeforeVote } from '../../mocks/fixtures';
@@ -14,6 +14,13 @@ import { PickScreen } from './PickScreen';
 
 const server = setupServer(...handlers);
 
+function LocationStateProbe() {
+  const location = useLocation();
+  return (
+    <output data-testid="location-state">{location.state === null ? 'cleared' : 'present'}</output>
+  );
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => {
   server.resetHandlers();
@@ -21,10 +28,11 @@ afterEach(() => {
 });
 afterAll(() => server.close());
 
-function renderScreen() {
+function renderScreen(state: unknown = null) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[{ pathname: '/', state }]}>
+      <LocationStateProbe />
       <QueryClientProvider client={client}>
         <AuthFlowProvider initialStatus="authenticated">
           <ToastProvider>
@@ -81,6 +89,146 @@ describe('PickScreen', () => {
       '계획이 있으면 여행지에서 마음이 더 편해요.',
     );
     expect(screen.getByText('24 / 300')).toBeInTheDocument();
+  });
+
+  it('로그인 후 같은 Pick으로 돌아오면 의견 초안을 복구하되 자동 등록하지 않는다', async () => {
+    server.use(http.get('*/api/__mock/picks/today', () => HttpResponse.json(todayPickAfterVote)));
+    renderScreen({
+      loginRecovery: {
+        intent: {
+          action: 'write-opinion',
+          returnTo: '/',
+          targetId: todayPickAfterVote.id,
+          draft: '로그인 전 작성한 의견',
+        },
+        result: 'success',
+        sessionConfirmed: true,
+      },
+    });
+
+    expect(await screen.findByRole('dialog', { name: '의견 남기기' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: '선택한 이유를 남겨주세요' })).toHaveValue(
+      '로그인 전 작성한 의견',
+    );
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('로그인 복귀 화면에서 300 emoji 의견 초안을 그대로 복원한다', async () => {
+    const draft = '😀'.repeat(300);
+    server.use(http.get('*/api/__mock/picks/today', () => HttpResponse.json(todayPickAfterVote)));
+    renderScreen({
+      loginRecovery: {
+        intent: {
+          action: 'write-opinion',
+          returnTo: '/',
+          targetId: todayPickAfterVote.id,
+          draft,
+        },
+        result: 'success',
+        sessionConfirmed: true,
+      },
+    });
+
+    expect(await screen.findByRole('dialog', { name: '의견 남기기' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: '선택한 이유를 남겨주세요' })).toHaveValue(draft);
+    expect([...draft]).toHaveLength(300);
+    expect(screen.getByText('300 / 300')).toBeInTheDocument();
+  });
+
+  it('오늘의 Pick이 달라져 의견 편집을 복구할 수 없어도 초안은 화면에 남긴다', async () => {
+    server.use(http.get('*/api/__mock/picks/today', () => HttpResponse.json(todayPickAfterVote)));
+    renderScreen({
+      loginRecovery: {
+        intent: {
+          action: 'write-opinion',
+          returnTo: '/',
+          targetId: 'previous-pick',
+          draft: '다른 Pick에서 작성한 의견 초안',
+        },
+        result: 'success',
+        sessionConfirmed: true,
+      },
+    });
+
+    expect(await screen.findByText('cleared')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: '로그인 후 복구한 의견 초안' })).toHaveValue(
+      '다른 Pick에서 작성한 의견 초안',
+    );
+  });
+
+  it.each(['like-opinion', 'delete-opinion'] as const)(
+    '%s 복귀는 세션이 확인되지 않으면 로그인 성공 안내를 보이지 않는다',
+    async (action) => {
+      server.use(http.get('*/api/__mock/picks/today', () => HttpResponse.json(todayPickAfterVote)));
+      renderScreen({
+        loginRecovery: {
+          intent: { action, returnTo: '/' },
+          result: 'success',
+          sessionConfirmed: false,
+        },
+      });
+
+      expect(await screen.findByText('cleared')).toBeInTheDocument();
+      expect(
+        screen.queryByText('로그인했어요. 원래 하려던 작업은 다시 선택해 주세요.'),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it('like 복귀는 success 결과와 확인된 세션이 모두 있을 때만 재선택 안내를 보인다', async () => {
+    server.use(http.get('*/api/__mock/picks/today', () => HttpResponse.json(todayPickAfterVote)));
+    renderScreen({
+      loginRecovery: {
+        intent: { action: 'like-opinion', returnTo: '/' },
+        result: 'success',
+        sessionConfirmed: true,
+      },
+    });
+
+    expect(
+      await screen.findByText('로그인했어요. 원래 하려던 작업은 다시 선택해 주세요.'),
+    ).toBeInTheDocument();
+  });
+
+  it.each(['cancelled', 'failed'] as const)(
+    '%s like 복귀는 로그인 성공 안내를 보이지 않는다',
+    async (result) => {
+      server.use(http.get('*/api/__mock/picks/today', () => HttpResponse.json(todayPickAfterVote)));
+      renderScreen({
+        loginRecovery: {
+          intent: { action: 'like-opinion', returnTo: '/' },
+          result,
+          sessionConfirmed: false,
+        },
+      });
+
+      expect(await screen.findByText('cleared')).toBeInTheDocument();
+      expect(
+        screen.queryByText('로그인했어요. 원래 하려던 작업은 다시 선택해 주세요.'),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it('인증되지 않은 failed 복귀에서도 의견 초안은 복원한다', async () => {
+    server.use(http.get('*/api/__mock/picks/today', () => HttpResponse.json(todayPickAfterVote)));
+    renderScreen({
+      loginRecovery: {
+        intent: {
+          action: 'write-opinion',
+          returnTo: '/',
+          targetId: todayPickAfterVote.id,
+          draft: '실패 후에도 보존할 의견 초안',
+        },
+        result: 'failed',
+        sessionConfirmed: false,
+      },
+    });
+
+    expect(await screen.findByRole('dialog', { name: '의견 남기기' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: '선택한 이유를 남겨주세요' })).toHaveValue(
+      '실패 후에도 보존할 의견 초안',
+    );
+    expect(screen.queryByText('로그인했어요.')).not.toBeInTheDocument();
   });
 
   it('asks for confirmation before deleting my opinion', async () => {

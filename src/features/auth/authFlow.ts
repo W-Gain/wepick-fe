@@ -8,6 +8,13 @@ export type LoginIntent = {
   draft?: string;
 };
 
+export type LoginRecovery = {
+  intent: LoginIntent;
+  result: 'success' | 'cancelled' | 'failed';
+  sessionConfirmed: boolean;
+  merge?: 'kept_member_vote';
+};
+
 export type AuthFlowContextValue = {
   status: AuthStatus;
   pendingIntent: LoginIntent | null;

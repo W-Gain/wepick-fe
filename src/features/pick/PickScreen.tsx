@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import type { Choice, Opinion, Pick } from '../../shared/contracts';
@@ -15,7 +15,7 @@ import {
   useToast,
   VoteChoice,
 } from '../../shared/ui';
-import type { LoginIntent } from '../auth/authFlow';
+import type { LoginIntent, LoginRecovery } from '../auth/authFlow';
 import { useAuthFlow } from '../auth/authFlow';
 import { LoginRequiredSheet } from '../auth/LoginRequiredSheet';
 import { OpinionDeleteDialog } from './OpinionDeleteDialog';
@@ -148,15 +148,34 @@ function OpinionCard({
 type OpinionEditorState = {
   mode: 'create' | 'edit';
   opinion?: Opinion;
+  initialBody?: string;
+  restoredFromLogin?: boolean;
 };
 
 function ResultAndOpinions({ pick }: { pick: Pick }) {
   const opinionsQuery = useOpinions(pick.id, Boolean(pick.result) && pick.opinionsAvailable);
+  const location = useLocation();
+  const recovery = readLoginRecovery(location.state);
   const [filter, setFilter] = useState<'all' | Choice>('all');
   const [loginIntent, setLoginIntent] = useState<LoginIntent | null>(null);
-  const [editor, setEditor] = useState<OpinionEditorState | null>(null);
+  const [editor, setEditor] = useState<OpinionEditorState | null>(() => {
+    if (
+      !recovery ||
+      recovery.intent.action !== 'write-opinion' ||
+      recovery.intent.returnTo !== `${location.pathname}${location.search}${location.hash}` ||
+      recovery.intent.targetId !== pick.id
+    ) {
+      return null;
+    }
+    return {
+      mode: 'create',
+      initialBody: recovery.intent.draft ?? '',
+      restoredFromLogin: true,
+    };
+  });
   const [deleteOpinion, setDeleteOpinion] = useState<Opinion | null>(null);
-  const location = useLocation();
+  const navigate = useNavigate();
+  const processedRecoveryKey = useRef<string | null>(null);
   const { status } = useAuthFlow();
   const { notify } = useToast();
   const opinions = opinionsQuery.data?.items ?? [];
@@ -168,6 +187,24 @@ function ResultAndOpinions({ pick }: { pick: Pick }) {
     ? undefined
     : (opinions.find((opinion) => opinion.ownedByMe) ??
       Object.values(pick.representativeOpinions).find((opinion) => opinion?.ownedByMe));
+
+  useEffect(() => {
+    if (!recovery || processedRecoveryKey.current === location.key) return;
+    if (recovery.intent.returnTo !== `${location.pathname}${location.search}${location.hash}`)
+      return;
+    if (
+      recovery.result === 'success' &&
+      recovery.sessionConfirmed &&
+      (recovery.intent.action === 'like-opinion' || recovery.intent.action === 'delete-opinion')
+    ) {
+      notify({ tone: 'info', title: '로그인했어요. 원래 하려던 작업은 다시 선택해 주세요.' });
+    }
+    processedRecoveryKey.current = location.key;
+    navigate(`${location.pathname}${location.search}${location.hash}`, {
+      replace: true,
+      state: null,
+    });
+  }, [location, navigate, notify, pick.id, recovery]);
 
   function openEditor(nextEditor: OpinionEditorState) {
     if (status === 'authenticated') {
@@ -331,11 +368,18 @@ function ResultAndOpinions({ pick }: { pick: Pick }) {
             (option) => option.choice === (editor?.opinion?.choice ?? pick.userVote ?? 'A'),
           )?.label ?? ''
         }
-        initialBody={editor?.opinion?.body}
+        initialBody={editor?.opinion?.body ?? editor?.initialBody}
         onOpenChange={(open) => {
           if (!open) setEditor(null);
         }}
         onSubmit={() => {
+          if (editor?.restoredFromLogin && !pick.opinionsAvailable) {
+            notify({
+              tone: 'info',
+              title: '로그인했어요. 현재 Pick의 의견 기능은 아직 연결되지 않았어요.',
+            });
+            throw new Error('The current Pick does not support opinions yet.');
+          }
           setEditor(null);
           notify({ tone: 'info', title: '현재 지원하지 않는 기능이에요.' });
         }}
@@ -369,11 +413,23 @@ function PickStateShell({ detail, children }: { detail: boolean; children: React
 
 export function PickScreen({ pickId }: PickScreenProps) {
   const detail = Boolean(pickId);
+  const location = useLocation();
   const query = usePick(pickId);
   const vote = useVote(query.data);
   const [choice, setChoice] = useState<Choice | null>(null);
   const [recordedPickId, setRecordedPickId] = useState<string | null>(null);
   const { notify } = useToast();
+  const recovery = readLoginRecovery(location.state);
+  const [recoveryDraft] = useState(() => {
+    if (
+      recovery?.intent.action !== 'write-opinion' ||
+      recovery.intent.returnTo !== `${location.pathname}${location.search}${location.hash}` ||
+      !recovery.intent.draft
+    ) {
+      return null;
+    }
+    return { draft: recovery.intent.draft, targetId: recovery.intent.targetId };
+  });
 
   if (query.isLoading)
     return (
@@ -394,6 +450,7 @@ export function PickScreen({ pickId }: PickScreenProps) {
           }
           onRetry={() => query.refetch()}
         />
+        {recoveryDraft && <LoginRecoveryDraft draft={recoveryDraft.draft} />}
       </PickStateShell>
     );
   }
@@ -441,6 +498,9 @@ export function PickScreen({ pickId }: PickScreenProps) {
       </div>
       <PickHeader detail={detail} />
       <PickMeta pick={pick} detail={detail} />
+      {recoveryDraft && (recoveryDraft.targetId !== pick.id || !pick.userVote || !pick.result) && (
+        <LoginRecoveryDraft draft={recoveryDraft.draft} />
+      )}
       <div className="pick-screen__question">
         <h1 id="pick-question">{pick.question}</h1>
       </div>
@@ -478,6 +538,59 @@ export function PickScreen({ pickId }: PickScreenProps) {
       ) : (
         <ResultAndOpinions pick={pick} />
       )}
+    </section>
+  );
+}
+
+function readLoginRecovery(state: unknown): LoginRecovery | null {
+  if (!state || typeof state !== 'object' || !('loginRecovery' in state)) return null;
+  const recovery = state.loginRecovery;
+  if (!recovery || typeof recovery !== 'object' || !('intent' in recovery)) return null;
+  const intent = recovery.intent;
+  if (
+    !intent ||
+    typeof intent !== 'object' ||
+    !('action' in intent) ||
+    !('returnTo' in intent) ||
+    typeof intent.action !== 'string' ||
+    typeof intent.returnTo !== 'string'
+  ) {
+    return null;
+  }
+  if (
+    !['write-opinion', 'like-opinion', 'delete-opinion', 'view-history', 'view-profile'].includes(
+      intent.action,
+    )
+  ) {
+    return null;
+  }
+  if (
+    'targetId' in intent &&
+    intent.targetId !== undefined &&
+    typeof intent.targetId !== 'string'
+  ) {
+    return null;
+  }
+  if ('draft' in intent && intent.draft !== undefined && typeof intent.draft !== 'string') {
+    return null;
+  }
+  if (
+    !('result' in recovery) ||
+    !['success', 'cancelled', 'failed'].includes(String(recovery.result))
+  ) {
+    return null;
+  }
+  if (!('sessionConfirmed' in recovery) || typeof recovery.sessionConfirmed !== 'boolean') {
+    return null;
+  }
+  return recovery as LoginRecovery;
+}
+
+function LoginRecoveryDraft({ draft }: { draft: string }) {
+  return (
+    <section className="opinion-editor__field" aria-label="로그인 후 복구한 의견 초안">
+      <span>작성하던 의견 초안</span>
+      <textarea aria-label="로그인 후 복구한 의견 초안" readOnly value={draft} />
     </section>
   );
 }

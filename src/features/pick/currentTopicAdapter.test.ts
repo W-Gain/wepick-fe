@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { clearCsrfToken } from '../../shared/api/client';
 import {
   getCurrentTopic,
   submitCurrentTopicVote,
@@ -40,7 +41,10 @@ function response(data: unknown) {
   return { message: "Today's topic retrieved", data, error: null };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  clearCsrfToken();
+});
 
 describe('current topic response adapter', () => {
   it('uses the actual A/B labels and hides counts before the member votes', () => {
@@ -95,6 +99,7 @@ describe('current topic vote', () => {
     const beforeVote = currentTopicResponseAdapter.fromResponse(response(topic));
     const fetchMock = vi
       .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { token: 'csrf-token' } })))
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ message: 'Vote successful', data: null, error: null })),
       )
@@ -119,6 +124,11 @@ describe('current topic vote', () => {
     });
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
+      '/api/csrf',
+      expect.objectContaining({ method: 'GET', credentials: 'include' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
       '/api/topics/42/vote',
       expect.objectContaining({
         method: 'POST',
@@ -127,7 +137,7 @@ describe('current topic vote', () => {
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
+      3,
       '/api/topics/today',
       expect.objectContaining({ method: 'GET', credentials: 'include' }),
     );
@@ -151,6 +161,7 @@ describe('current topic vote', () => {
     const beforeVote = currentTopicResponseAdapter.fromResponse(response(topic));
     const fetchMock = vi
       .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { token: 'csrf-token' } })))
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ message: 'Vote successful', data: null, error: null })),
       )
@@ -160,13 +171,14 @@ describe('current topic vote', () => {
     await expect(submitCurrentTopicVote(beforeVote, 'A')).rejects.toBeInstanceOf(
       VoteResultRefreshError,
     );
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('refreshes the existing choice after a duplicate-vote response', async () => {
     const beforeVote = currentTopicResponseAdapter.fromResponse(response(topic));
     const fetchMock = vi
       .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { token: 'csrf-token' } })))
       .mockResolvedValueOnce(new Response(null, { status: 409 }))
       .mockResolvedValueOnce(
         new Response(JSON.stringify(response({ ...topic, votedOptionId: 101 }))),
@@ -176,7 +188,7 @@ describe('current topic vote', () => {
     const error = await submitCurrentTopicVote(beforeVote, 'B').catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(VoteAlreadyRecordedError);
     expect((error as VoteAlreadyRecordedError).pick.userVote).toBe('A');
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
 
